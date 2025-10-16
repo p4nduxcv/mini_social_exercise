@@ -182,3 +182,6 @@ cython_debug/
 
 **/**.DS_Store
 app_exercise_solved.py
+
+
+.idea
