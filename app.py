@@ -6,7 +6,8 @@ import json
 import sqlite3
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+import collections
 
 app = Flask(__name__)
 app.secret_key = '123456789'
@@ -954,6 +955,42 @@ def user_risk_analysis(user_id):
     """
 
     score = 0
+   # 1. Calculate the base risk score from all of the user's content.
+    user_posts = query_db(
+        'SELECT content FROM posts WHERE user_id = ?', (user_id,))
+    for post in user_posts:
+        _, post_risk_score = moderate_content(post['content'])
+        score += post_risk_score
+
+    user_comments = query_db(
+        'SELECT content FROM comments WHERE user_id = ?', (user_id,))
+    for comment in user_comments:
+        _, comment_risk_score = moderate_content(comment['content'])
+        score += comment_risk_score
+
+    # 2. Add the new risk measure: Repetitive Content Detection.
+    time_period = datetime.utcnow() - timedelta(hours=1)
+    time_period_str = time_period.strftime('%Y-%m-%d %H:%M:%S.%f')
+
+    recent_posts = query_db(
+        'SELECT content FROM posts WHERE user_id = ? AND created_at > ?',
+        (user_id, time_period_str)
+    )
+    recent_comments = query_db(
+        'SELECT content FROM comments WHERE user_id = ? AND created_at > ?',
+        (user_id, time_period_str)
+    )
+
+    recent_content_list = [p['content']
+                           for p in recent_posts] + [c['content'] for c in recent_comments]
+
+    # If the user has posted recently, check for duplicates.
+    if recent_content_list:
+        content_counts = collections.Counter(recent_content_list)
+        for content, count in content_counts.items():
+            if count > 3:
+                score += 3.0
+                break
 
     return score
 
