@@ -932,7 +932,68 @@ def recommend(user_id, filter_following):
     - https://www.researchgate.net/publication/227268858_Recommender_Systems_Handbook
     """
 
-    recommended_posts = {}
+    if not user_id:
+        posts = query_db(
+            """
+            SELECT p.id, p.content, p.created_at, u.username, u.id as user_id,
+                   (SELECT COUNT(*) FROM reactions r WHERE r.post_id = p.id) as reaction_count
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            ORDER BY reaction_count DESC, p.created_at DESC
+            LIMIT 5
+            """
+        )
+        return posts if posts else []
+
+    followed_rows = query_db(
+        'SELECT followed_id FROM follows WHERE follower_id = ?', (user_id,)
+    )
+    author_pool_ids = {row['followed_id'] for row in followed_rows}
+
+    POSITIVE_REACTIONS = ('like', 'love', 'laugh', 'wow')
+    reaction_placeholders = ','.join('?' for _ in POSITIVE_REACTIONS)
+
+    if not filter_following:
+        liked_author_rows = query_db(
+            f'''
+            SELECT p.user_id FROM posts p
+            JOIN reactions r ON p.id = r.post_id
+            WHERE r.user_id = ? AND r.reaction_type IN ({reaction_placeholders})
+            ''',
+            (user_id,) + POSITIVE_REACTIONS
+        )
+        author_pool_ids.update(row['user_id'] for row in liked_author_rows)
+
+    if not author_pool_ids:
+        return recommend(None, False)
+
+    author_placeholders = ','.join('?' for _ in author_pool_ids)
+
+    query = f"""
+        SELECT p.id, p.content, p.created_at, u.username, u.id as user_id,
+               (SELECT COUNT(*) FROM reactions r WHERE r.post_id = p.id) as reaction_count
+        FROM posts p
+        JOIN users u ON p.user_id = u.id
+        WHERE
+            -- 1. Post is from an author in our pool
+            p.user_id IN ({author_placeholders})
+            
+            -- 2. Post is not by the current user
+            AND p.user_id != ?
+            
+            -- 3. Post has not been reacted to by the current user
+            AND p.id NOT IN (SELECT post_id FROM reactions WHERE user_id = ?)
+            
+        ORDER BY reaction_count DESC, p.created_at DESC
+        LIMIT 5
+    """
+
+    params = tuple(author_pool_ids) + (user_id, user_id)
+
+    recommended_posts = query_db(query, params)
+
+    if not recommended_posts:
+        return recommend(None, False)
 
     return recommended_posts
 
